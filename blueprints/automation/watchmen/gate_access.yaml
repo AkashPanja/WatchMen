@@ -1,0 +1,79 @@
+blueprint:
+  name: Watchmen gate access
+  description: >-
+    When any trigger fires (doorbell, motion, button, webhook, calendar, ...),
+    ask Watchmen to review a camera snapshot with AI. If access is approved
+    with enough confidence, run your unlock actions (for example
+    `lock.unlock` on a gate). Denied or failed reviews run the denied
+    actions instead — Watchmen fails closed.
+  domain: automation
+  input:
+    trigger:
+      name: Trigger
+      description: >-
+        Any trigger(s) that start an access request. Use the trigger editor to
+        pick device triggers, state changes, events, webhooks and more.
+      selector:
+        trigger:
+    camera:
+      name: Camera
+      description: Camera whose snapshot the AI reviews.
+      selector:
+        entity:
+          domain: camera
+          multiple: false
+    context_note:
+      name: Context note
+      description: Free text passed to the AI explaining what happened.
+      default: access requested
+      selector:
+        text:
+    min_confidence:
+      name: Minimum confidence
+      description: Approvals below this confidence are treated as denials.
+      default: 0.85
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.05
+          mode: slider
+    approved_actions:
+      name: Approved actions
+      description: Run when access is approved — e.g. unlock the gate.
+      default: []
+      selector:
+        action:
+    denied_actions:
+      name: Denied actions
+      description: Run when access is denied or the review fails (optional).
+      default: []
+      selector:
+        action:
+
+triggers:
+  - triggers: !input trigger
+
+conditions: []
+
+actions:
+  - variables:
+      watchmen_min_confidence: !input min_confidence
+  - action: watchmen.request_access
+    data:
+      camera: !input camera
+      context: !input context_note
+    response_variable: watchmen_decision
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ watchmen_decision.approved | bool(false) and
+                 (watchmen_decision.confidence | float(0)) >=
+                 (watchmen_min_confidence | float(0)) }}
+        sequence: !input approved_actions
+    default: !input denied_actions
+
+mode: queued
+max: 3
+max_exceeded: silent

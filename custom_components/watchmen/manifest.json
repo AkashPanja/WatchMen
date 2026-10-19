@@ -1,0 +1,14 @@
+{
+  "domain": "watchmen",
+  "name": "Watchmen",
+  "codeowners": ["@AkashPanja"],
+  "config_flow": true,
+  "dependencies": ["camera"],
+  "documentation": "https://github.com/AkashPanja/WatchMen",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/AkashPanja/WatchMen/issues",
+  "loggers": ["custom_components.watchmen"],
+  "requirements": [],
+  "version": "0.2.0"
+}

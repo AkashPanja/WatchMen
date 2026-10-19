@@ -1,0 +1,74 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Watchmen motion detection",
+        "description": "Pick the cameras Watchmen should watch. Motion is detected from camera events (ONVIF and friends) or by analyzing frames — automatic mode picks the best option per camera.",
+        "data": {
+          "cameras": "Cameras",
+          "mode": "Detection mode"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "These cameras are already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Watchmen options",
+        "data": {
+          "cameras": "Cameras",
+          "mode": "Detection mode",
+          "frame_interval": "Frame analysis interval",
+          "diff_threshold": "Motion sensitivity (changed pixel ratio)",
+          "motion_off_delay": "Motion auto-off delay",
+          "residents": "Known residents (comma separated names)",
+          "ai_task_entity": "AI task entity for access reviews",
+          "confidence_threshold": "Minimum confidence to approve access",
+          "cooldown": "Cooldown between access reviews"
+        }
+      }
+    }
+  },
+  "services": {
+    "request_access": {
+      "name": "Request access review",
+      "description": "Ask the AI to review a camera snapshot and return an approve/deny decision. Fails closed on errors.",
+      "fields": {
+        "camera": {
+          "name": "Camera",
+          "description": "Camera whose snapshot is reviewed."
+        },
+        "context": {
+          "name": "Context",
+          "description": "Free-text description of why access was requested (e.g. which trigger fired)."
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "motion": {
+        "name": "Motion"
+      }
+    },
+    "sensor": {
+      "access_decision": {
+        "name": "Last access decision"
+      }
+    }
+  },
+  "exceptions": {
+    "camera_not_configured": {
+      "message": "Camera {camera} is not configured in Watchmen."
+    },
+    "ai_task_missing": {
+      "message": "No AI Task service is available. Configure an AI provider (OpenAI, Gemini, Ollama, ...) and an AI task entity in Watchmen options."
+    },
+    "review_failed": {
+      "message": "The access review failed: {error}. Access was denied (fail closed)."
+    }
+  }
+}

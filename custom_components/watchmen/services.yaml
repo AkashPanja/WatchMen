@@ -1,0 +1,13 @@
+request_access:
+  fields:
+    camera:
+      required: true
+      example: camera.front_door
+      selector:
+        entity:
+          domain: camera
+    context:
+      example: front gate doorbell pressed
+      default: ""
+      selector:
+        text:
