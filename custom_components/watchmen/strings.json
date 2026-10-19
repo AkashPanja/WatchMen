@@ -37,11 +37,11 @@
           "frames_back": "Frames checked before the trigger",
           "frames_forward": "Frames fetched after the trigger",
           "identify_threshold": "Minimum match percentage to identify a person"
-        },
-        "errors": {
-          "api_key_required": "An API key is required for this provider."
         }
       }
+    },
+    "error": {
+      "api_key_required": "An API key is required for this provider."
     }
   },
   "services": {
