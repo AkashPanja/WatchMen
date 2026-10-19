@@ -11,6 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .const import (
+    AI_TASK_AUTO,
     CONF_AI_TASK_ENTITY,
     CONF_CAMERAS,
     CONF_CONFIDENCE_THRESHOLD,
@@ -249,7 +250,9 @@ class WatchmenOptionsFlow(OptionsFlow):
             ),
         }
 
-        ai_task_default = defaults.get(CONF_AI_TASK_ENTITY) or ""
+        # Non-empty sentinel so the required select can show "Auto" as the
+        # pre-selected value (an empty value is treated as "not filled").
+        ai_task_default = defaults.get(CONF_AI_TASK_ENTITY) or AI_TASK_AUTO
         ai_task_options = _ai_task_options(self.hass, ai_task_default)
         schema_dict[
             vol.Required(CONF_AI_TASK_ENTITY, default=ai_task_default)
@@ -264,7 +267,7 @@ class WatchmenOptionsFlow(OptionsFlow):
         if user_input is not None:
             user_input[CONF_CAMERAS] = sorted(user_input[CONF_CAMERAS])
             user_input[CONF_AI_TASK_ENTITY] = (
-                user_input.get(CONF_AI_TASK_ENTITY) or ""
+                user_input.get(CONF_AI_TASK_ENTITY) or AI_TASK_AUTO
             )
             provider = str(
                 user_input.get(CONF_LLM_PROVIDER, LLM_PROVIDER_AI_TASK)
@@ -284,7 +287,7 @@ class WatchmenOptionsFlow(OptionsFlow):
 def _ai_task_options(hass: HomeAssistant, current: str) -> list[dict[str, str]]:
     """Build AI task entity options: auto plus every known AI task entity."""
     options: list[dict[str, str]] = [
-        {"value": "", "label": "Auto (preferred AI task entity)"}
+        {"value": AI_TASK_AUTO, "label": "Auto (preferred AI task entity)"}
     ]
     registry = er.async_get(hass)
     entity_ids = sorted(

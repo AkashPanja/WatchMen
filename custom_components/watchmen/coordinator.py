@@ -35,6 +35,7 @@ from homeassistant.util import dt as dt_util
 from PIL import Image, ImageChops
 
 from .const import (
+    AI_TASK_AUTO,
     CONF_AI_TASK_ENTITY,
     CONF_CAMERAS,
     CONF_CONFIDENCE_THRESHOLD,
@@ -184,8 +185,9 @@ class WatchmenCoordinator(DataUpdateCoordinator[dict[CameraId, CameraRuntime]]):
 
     @property
     def ai_task_entity(self) -> str:
-        """AI task entity used for access reviews."""
-        return str(self.options.get(CONF_AI_TASK_ENTITY, DEFAULT_AI_TASK_ENTITY))
+        """AI task entity used for access reviews ("" = HA preferred task)."""
+        raw = str(self.options.get(CONF_AI_TASK_ENTITY, DEFAULT_AI_TASK_ENTITY))
+        return "" if raw in ("", AI_TASK_AUTO) else raw
 
     @property
     def llm_provider(self) -> str:

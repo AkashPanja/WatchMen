@@ -8,6 +8,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.watchmen.const import (
+    AI_TASK_AUTO,
     CONF_AI_TASK_ENTITY,
     CONF_CAMERAS,
     CONF_FACE_BUFFER_INTERVAL,
@@ -19,6 +20,7 @@ from custom_components.watchmen.const import (
     CONF_MODE,
     DOMAIN,
 )
+from custom_components.watchmen.coordinator import WatchmenCoordinator
 
 from .helpers import CAMERA_ENTITY, register_camera
 
@@ -31,7 +33,7 @@ OPTIONS_INPUT = {
     "diff_threshold": 0.05,
     "motion_off_delay": 15,
     "residents": "Alice, Bob",
-    CONF_AI_TASK_ENTITY: "",
+    CONF_AI_TASK_ENTITY: AI_TASK_AUTO,
     "confidence_threshold": 0.9,
     "cooldown": 60,
     CONF_LLM_PROVIDER: "ai_task",
@@ -104,7 +106,7 @@ async def test_options_flow(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["residents"] == "Alice, Bob"
     assert entry.options["confidence_threshold"] == 0.9
-    assert entry.options[CONF_AI_TASK_ENTITY] == ""
+    assert entry.options[CONF_AI_TASK_ENTITY] == AI_TASK_AUTO
     assert entry.options[CONF_LLM_PROVIDER] == "ai_task"
     assert entry.options[CONF_FACE_BUFFER_INTERVAL] == 1.5
     assert entry.options[CONF_FRAMES_BACK] == 6
@@ -133,8 +135,32 @@ async def test_options_flow_partial_input_uses_defaults(hass: HomeAssistant) -> 
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options[CONF_LLM_PROVIDER] == "ai_task"
+    assert entry.options[CONF_AI_TASK_ENTITY] == AI_TASK_AUTO
     assert entry.options[CONF_FRAMES_BACK] == 4
     assert entry.options[CONF_IDENTIFY_THRESHOLD] == 70
+
+
+async def test_ai_task_entity_auto_sentinel(hass: HomeAssistant) -> None:
+    """'auto' and a legacy empty value resolve to HA's preferred AI task."""
+    for stored in ("", AI_TASK_AUTO):
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=USER_INPUT,
+            title="Watchmen",
+            unique_id=CAMERA_ENTITY,
+            options={CONF_AI_TASK_ENTITY: stored},
+        )
+        coordinator = WatchmenCoordinator(hass, entry)
+        assert coordinator.ai_task_entity == ""
+
+    explicit = MockConfigEntry(
+        domain=DOMAIN,
+        data=USER_INPUT,
+        title="Watchmen",
+        unique_id=CAMERA_ENTITY,
+        options={CONF_AI_TASK_ENTITY: "sensor.my_ai_task"},
+    )
+    assert WatchmenCoordinator(hass, explicit).ai_task_entity == "sensor.my_ai_task"
 
 
 async def test_options_flow_requires_api_key_for_direct_provider(
