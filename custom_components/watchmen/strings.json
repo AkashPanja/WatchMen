@@ -18,6 +18,7 @@
     "step": {
       "init": {
         "title": "Watchmen options",
+        "description": "Motion, LLM provider and face identification settings.",
         "data": {
           "cameras": "Cameras",
           "mode": "Detection mode",
@@ -27,7 +28,18 @@
           "residents": "Known residents (comma separated names)",
           "ai_task_entity": "AI task entity for access reviews",
           "confidence_threshold": "Minimum confidence to approve access",
-          "cooldown": "Cooldown between access reviews"
+          "cooldown": "Cooldown between access reviews",
+          "llm_provider": "LLM provider",
+          "llm_api_key": "API key (direct providers)",
+          "llm_model": "Model name (empty = provider default)",
+          "llm_base_url": "Base URL (empty = provider default)",
+          "face_buffer_interval": "Face buffer interval (0 disables buffering)",
+          "frames_back": "Frames checked before the trigger",
+          "frames_forward": "Frames fetched after the trigger",
+          "identify_threshold": "Minimum match percentage to identify a person"
+        },
+        "errors": {
+          "api_key_required": "An API key is required for this provider."
         }
       }
     }
@@ -44,6 +56,60 @@
         "context": {
           "name": "Context",
           "description": "Free-text description of why access was requested (e.g. which trigger fired)."
+        }
+      }
+    },
+    "add_face": {
+      "name": "Add face",
+      "description": "Enroll a photo for a person. Provide a camera (snapshot is taken now) or a base64 image. Add several photos per person for better matching.",
+      "fields": {
+        "name": {
+          "name": "Person name",
+          "description": "Name to match against (e.g. Alice)."
+        },
+        "camera": {
+          "name": "Camera",
+          "description": "Take the photo from this camera now."
+        },
+        "image": {
+          "name": "Image (base64)",
+          "description": "Base64 encoded photo instead of a camera snapshot."
+        }
+      }
+    },
+    "remove_face": {
+      "name": "Remove face",
+      "description": "Forget a person and all their enrolled photos.",
+      "fields": {
+        "name": {
+          "name": "Person name",
+          "description": "Name of the person to remove."
+        }
+      }
+    },
+    "list_faces": {
+      "name": "List faces",
+      "description": "List enrolled people with their photo counts."
+    },
+    "identify_person": {
+      "name": "Identify person",
+      "description": "Analyze frames around the trigger, crop the visible face and match it against the enrolled gallery. Returns the person name and a confidence percentage. Fails closed.",
+      "fields": {
+        "camera": {
+          "name": "Camera",
+          "description": "Camera providing the frames."
+        },
+        "context": {
+          "name": "Context",
+          "description": "Why identification ran (e.g. doorbell pressed)."
+        },
+        "frames_back": {
+          "name": "Frames back",
+          "description": "How many buffered frames before the trigger to check."
+        },
+        "frames_forward": {
+          "name": "Frames forward",
+          "description": "How many frames to capture after the trigger."
         }
       }
     }
@@ -69,6 +135,30 @@
     },
     "review_failed": {
       "message": "The access review failed: {error}. Access was denied (fail closed)."
+    },
+    "identify_failed": {
+      "message": "Person identification failed: {error}."
+    },
+    "no_faces_enrolled": {
+      "message": "No faces are enrolled. Use watchmen.add_face first."
+    },
+    "no_frames_captured": {
+      "message": "No frames could be captured from {camera}."
+    },
+    "invalid_image": {
+      "message": "The image could not be read: {error}."
+    },
+    "add_face_source": {
+      "message": "Provide either a camera or a base64 image — not both, not neither."
+    },
+    "llm_request_failed": {
+      "message": "LLM request via {provider} failed: {error}."
+    },
+    "api_key_missing": {
+      "message": "No API key configured for {provider}. Add it in the Watchmen options."
+    },
+    "attachment_unsupported": {
+      "message": "Attachment {attachment} could not be read for the LLM request."
     }
   }
 }

@@ -28,6 +28,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
+    async_track_time_interval,
 )
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -39,13 +40,29 @@ from .const import (
     CONF_CONFIDENCE_THRESHOLD,
     CONF_COOLDOWN,
     CONF_DIFF_THRESHOLD,
+    CONF_FACE_BUFFER_INTERVAL,
     CONF_FRAME_INTERVAL,
+    CONF_FRAMES_BACK,
+    CONF_FRAMES_FORWARD,
+    CONF_IDENTIFY_THRESHOLD,
+    CONF_LLM_API_KEY,
+    CONF_LLM_BASE_URL,
+    CONF_LLM_MODEL,
+    CONF_LLM_PROVIDER,
     CONF_MODE,
     CONF_MOTION_OFF_DELAY,
     CONF_RESIDENTS,
     DEFAULT_AI_TASK_ENTITY,
     DEFAULT_DIFF_THRESHOLD,
+    DEFAULT_FACE_BUFFER_INTERVAL,
     DEFAULT_FRAME_INTERVAL,
+    DEFAULT_FRAMES_BACK,
+    DEFAULT_FRAMES_FORWARD,
+    DEFAULT_IDENTIFY_THRESHOLD,
+    DEFAULT_LLM_API_KEY,
+    DEFAULT_LLM_BASE_URL,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_PROVIDER,
     DEFAULT_OPTIONS,
     DEFAULT_RESIDENTS,
     DOMAIN,
@@ -55,6 +72,7 @@ from .const import (
     MODE_FRAME_DIFF,
     PIXEL_DIFF_THRESHOLD,
 )
+from .identify import FrameBuffer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,6 +119,18 @@ class WatchmenCoordinator(DataUpdateCoordinator[dict[CameraId, CameraRuntime]]):
         self._sensor_to_camera: dict[str, str] = {}
         self.data = self.runtimes
 
+        self.face_buffer_interval = max(
+            0.0,
+            float(
+                self.options.get(
+                    CONF_FACE_BUFFER_INTERVAL, DEFAULT_FACE_BUFFER_INTERVAL
+                )
+            ),
+        )
+        self.buffers: dict[str, FrameBuffer] = {}
+        self._buffer_unsub: Callable[[], None] | None = None
+        self._buffer_tick_task: asyncio.Task | None = None
+
         cameras: list[str] = list(
             self.options.get(CONF_CAMERAS) or entry.data.get(CONF_CAMERAS) or []
         )
@@ -112,6 +142,14 @@ class WatchmenCoordinator(DataUpdateCoordinator[dict[CameraId, CameraRuntime]]):
                 runtime.source_sensors = self._find_motion_sensors(camera)
                 for sensor in runtime.source_sensors:
                     self._sensor_to_camera[sensor] = camera
+
+        if self.face_buffer_interval > 0:
+            maxlen = int(
+                self.options.get(CONF_FRAMES_BACK, DEFAULT_FRAMES_BACK)
+            )
+            self.buffers = {
+                camera: FrameBuffer(maxlen) for camera in cameras
+            }
 
         if any(rt.mode == MODE_FRAME_DIFF for rt in self.runtimes.values()):
             self.update_interval = timedelta(
@@ -148,6 +186,43 @@ class WatchmenCoordinator(DataUpdateCoordinator[dict[CameraId, CameraRuntime]]):
     def ai_task_entity(self) -> str:
         """AI task entity used for access reviews."""
         return str(self.options.get(CONF_AI_TASK_ENTITY, DEFAULT_AI_TASK_ENTITY))
+
+    @property
+    def llm_provider(self) -> str:
+        """Configured LLM provider (ai_task, openai, claude, groq, openrouter)."""
+        return str(self.options.get(CONF_LLM_PROVIDER, DEFAULT_LLM_PROVIDER))
+
+    @property
+    def llm_api_key(self) -> str:
+        """API key for direct LLM providers (never logged)."""
+        return str(self.options.get(CONF_LLM_API_KEY, DEFAULT_LLM_API_KEY))
+
+    @property
+    def llm_model(self) -> str:
+        """Model name for direct LLM providers ("" = provider default)."""
+        return str(self.options.get(CONF_LLM_MODEL, DEFAULT_LLM_MODEL))
+
+    @property
+    def llm_base_url(self) -> str:
+        """Base URL override for direct LLM providers ("" = provider default)."""
+        return str(self.options.get(CONF_LLM_BASE_URL, DEFAULT_LLM_BASE_URL))
+
+    @property
+    def frames_back(self) -> int:
+        """Buffered frames collected before an identification trigger."""
+        return int(self.options.get(CONF_FRAMES_BACK, DEFAULT_FRAMES_BACK))
+
+    @property
+    def frames_forward(self) -> int:
+        """Frames fetched after an identification trigger."""
+        return int(self.options.get(CONF_FRAMES_FORWARD, DEFAULT_FRAMES_FORWARD))
+
+    @property
+    def identify_threshold(self) -> float:
+        """Minimum match percentage to report a person as identified."""
+        return float(
+            self.options.get(CONF_IDENTIFY_THRESHOLD, DEFAULT_IDENTIFY_THRESHOLD)
+        )
 
     def get_runtime(self, camera_entity_id: str) -> CameraRuntime | None:
         """Return the runtime for a camera entity id."""
@@ -212,8 +287,48 @@ class WatchmenCoordinator(DataUpdateCoordinator[dict[CameraId, CameraRuntime]]):
         )
 
     async def async_start(self) -> None:
-        """Start event listeners (called after first refresh)."""
+        """Start event listeners and the frame buffer poller."""
         self._async_start_event_listeners()
+        if self.buffers and any(
+            rt.mode != MODE_FRAME_DIFF for rt in self.runtimes.values()
+        ):
+            self._buffer_unsub = async_track_time_interval(
+                self.hass,
+                self._async_buffer_tick,
+                timedelta(seconds=self.face_buffer_interval),
+            )
+
+    @callback
+    def _async_buffer_tick(self, _now: Any) -> None:
+        """Schedule one buffer fetch round (skips if the last one lags)."""
+        if self._buffer_tick_task is not None and not self._buffer_tick_task.done():
+            return
+        self._buffer_tick_task = self.hass.async_create_task(
+            self._async_buffer_fetch_all(), name=f"{DOMAIN}_buffer"
+        )
+
+    async def _async_buffer_fetch_all(self) -> None:
+        """Snapshot every non-frame-analysis camera into its buffer."""
+        await asyncio.gather(
+            *(
+                self._async_buffer_fetch_one(camera, buffer)
+                for camera, buffer in self.buffers.items()
+                if (runtime := self.runtimes.get(camera)) is not None
+                and runtime.mode != MODE_FRAME_DIFF
+            )
+        )
+
+    async def _async_buffer_fetch_one(
+        self, camera: str, buffer: FrameBuffer
+    ) -> None:
+        """Fetch one snapshot into the buffer (frame-analysis cameras skip)."""
+        try:
+            image = await async_get_image(self.hass, camera, timeout=IMAGE_TIMEOUT)
+        except Exception:
+            _LOGGER.debug("Buffer snapshot failed for %s", camera, exc_info=True)
+            return
+        if image.content:
+            buffer.add(image.content)
 
     # ------------------------------------------------------------------
     # Event mode
@@ -314,6 +429,10 @@ class WatchmenCoordinator(DataUpdateCoordinator[dict[CameraId, CameraRuntime]]):
         runtime.image_ok = True
         image_bytes = image.content
 
+        buffer = self.buffers.get(runtime.camera_entity_id)
+        if buffer is not None:
+            buffer.add(image_bytes)
+
         def _process() -> tuple[float | None, bool]:
             with Image.open(io.BytesIO(image_bytes)) as raw:
                 frame = raw.convert("L").resize(FRAME_SIZE)
@@ -369,7 +488,17 @@ class WatchmenCoordinator(DataUpdateCoordinator[dict[CameraId, CameraRuntime]]):
         self.async_set_updated_data(self.data)
 
     async def async_stop(self) -> None:
-        """Clean up listeners and timers."""
+        """Clean up listeners, timers and the buffer poller."""
+        if self._buffer_unsub is not None:
+            self._buffer_unsub()
+            self._buffer_unsub = None
+        if self._buffer_tick_task is not None and not self._buffer_tick_task.done():
+            self._buffer_tick_task.cancel()
+            try:
+                await self._buffer_tick_task
+            except asyncio.CancelledError:
+                pass
+        self._buffer_tick_task = None
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()

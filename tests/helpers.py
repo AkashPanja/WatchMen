@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import io
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from PIL import Image as PILImage
@@ -15,6 +16,26 @@ from custom_components.watchmen.const import CONF_CAMERAS, CONF_MODE, MODE_EVENT
 
 MOTION_SOURCE = "binary_sensor.test_source_motion"
 CAMERA_ENTITY = "camera.test_cam"
+
+
+def register_fake_ai_task(
+    hass: HomeAssistant, responses: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Register a fake ai_task.generate_data; returns the recorded calls."""
+    calls: list[dict[str, Any]] = []
+
+    async def _fake(call):
+        calls.append(dict(call.data))
+        task_name = call.data.get("task_name", "")
+        return {"data": responses.get(task_name, {})}
+
+    hass.services.async_register(
+        "ai_task",
+        "generate_data",
+        _fake,
+        supports_response=SupportsResponse.ONLY,
+    )
+    return calls
 
 
 def make_jpeg(color: tuple[int, int, int]) -> bytes:

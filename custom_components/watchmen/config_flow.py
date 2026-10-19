@@ -16,18 +16,35 @@ from .const import (
     CONF_CONFIDENCE_THRESHOLD,
     CONF_COOLDOWN,
     CONF_DIFF_THRESHOLD,
+    CONF_FACE_BUFFER_INTERVAL,
     CONF_FRAME_INTERVAL,
+    CONF_FRAMES_BACK,
+    CONF_FRAMES_FORWARD,
+    CONF_IDENTIFY_THRESHOLD,
+    CONF_LLM_API_KEY,
+    CONF_LLM_BASE_URL,
+    CONF_LLM_MODEL,
+    CONF_LLM_PROVIDER,
     CONF_MODE,
     CONF_MOTION_OFF_DELAY,
     CONF_RESIDENTS,
     DEFAULT_OPTIONS,
     DOMAIN,
+    LLM_PROVIDER_AI_TASK,
 )
 
 MODE_OPTIONS = [
     {"value": "auto", "label": "Automatic (events or frame analysis)"},
     {"value": "event", "label": "Camera events only"},
     {"value": "frame_diff", "label": "Frame analysis only"},
+]
+
+LLM_PROVIDER_OPTIONS = [
+    {"value": "ai_task", "label": "Home Assistant AI Task (recommended)"},
+    {"value": "openai", "label": "OpenAI"},
+    {"value": "claude", "label": "Claude (Anthropic)"},
+    {"value": "groq", "label": "Groq"},
+    {"value": "openrouter", "label": "OpenRouter"},
 ]
 
 
@@ -88,12 +105,6 @@ class WatchmenOptionsFlow(OptionsFlow):
     ) -> Any:
         """Show the options form."""
         entry = self.config_entry
-        if user_input is not None:
-            user_input[CONF_CAMERAS] = sorted(user_input[CONF_CAMERAS])
-            user_input[CONF_AI_TASK_ENTITY] = (
-                user_input.get(CONF_AI_TASK_ENTITY) or ""
-            )
-            return self.async_create_entry(title="", data=user_input)
 
         defaults: dict[str, Any] = {
             key: entry.options.get(key, value)
@@ -174,6 +185,68 @@ class WatchmenOptionsFlow(OptionsFlow):
                     unit_of_measurement="s",
                 )
             ),
+            vol.Required(
+                CONF_LLM_PROVIDER, default=defaults[CONF_LLM_PROVIDER]
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=LLM_PROVIDER_OPTIONS,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(
+                CONF_LLM_API_KEY, default=defaults[CONF_LLM_API_KEY]
+            ): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            ),
+            vol.Optional(
+                CONF_LLM_MODEL, default=defaults[CONF_LLM_MODEL]
+            ): selector.TextSelector(selector.TextSelectorConfig(multiline=False)),
+            vol.Optional(
+                CONF_LLM_BASE_URL, default=defaults[CONF_LLM_BASE_URL]
+            ): selector.TextSelector(selector.TextSelectorConfig(multiline=False)),
+            vol.Required(
+                CONF_FACE_BUFFER_INTERVAL,
+                default=defaults[CONF_FACE_BUFFER_INTERVAL],
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=10,
+                    step=0.5,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement="s",
+                )
+            ),
+            vol.Required(
+                CONF_FRAMES_BACK, default=defaults[CONF_FRAMES_BACK]
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=10,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(
+                CONF_FRAMES_FORWARD, default=defaults[CONF_FRAMES_FORWARD]
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=5,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(
+                CONF_IDENTIFY_THRESHOLD, default=defaults[CONF_IDENTIFY_THRESHOLD]
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=100,
+                    step=5,
+                    mode=selector.NumberSelectorMode.SLIDER,
+                    unit_of_measurement="%",
+                )
+            ),
         }
 
         ai_task_default = defaults.get(CONF_AI_TASK_ENTITY) or ""
@@ -186,10 +259,26 @@ class WatchmenOptionsFlow(OptionsFlow):
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
         )
+        schema = vol.Schema(schema_dict)
 
-        return self.async_show_form(
-            step_id="init", data_schema=vol.Schema(schema_dict)
-        )
+        if user_input is not None:
+            user_input[CONF_CAMERAS] = sorted(user_input[CONF_CAMERAS])
+            user_input[CONF_AI_TASK_ENTITY] = (
+                user_input.get(CONF_AI_TASK_ENTITY) or ""
+            )
+            provider = str(
+                user_input.get(CONF_LLM_PROVIDER, LLM_PROVIDER_AI_TASK)
+            )
+            if (
+                provider != LLM_PROVIDER_AI_TASK
+                and not str(user_input.get(CONF_LLM_API_KEY, "")).strip()
+            ):
+                return self.async_show_form(
+                    step_id="init", data_schema=schema, errors={"base": "api_key_required"}
+                )
+            return self.async_create_entry(title="", data=user_input)
+
+        return self.async_show_form(step_id="init", data_schema=schema)
 
 
 def _ai_task_options(hass: HomeAssistant, current: str) -> list[dict[str, str]]:

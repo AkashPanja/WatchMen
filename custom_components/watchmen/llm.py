@@ -1,14 +1,14 @@
-"""LLM access review engine for Watchmen.
+"""LLM engine for Watchmen.
 
-Asks a Home Assistant AI Task entity to review a camera snapshot and
-return a structured approve/deny decision. Fails closed: any error or
-low confidence results in a denial.
+Routes LLM calls either through Home Assistant's built-in AI Task service
+(default) or directly to a provider API (OpenAI, Claude, Groq, OpenRouter).
+Access reviews fail closed: any error or low confidence results in a denial.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -24,8 +24,11 @@ from .const import (
     DOMAIN,
     EVENT_GATE_APPROVED,
     EVENT_GATE_DENIED,
+    LLM_PROVIDER_AI_TASK,
 )
-from .coordinator import WatchmenCoordinator
+
+if TYPE_CHECKING:
+    from .coordinator import WatchmenCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,7 +90,7 @@ def _build_instructions(
     )
 
 
-def _normalize_bool(value: Any) -> bool:
+def normalize_bool(value: Any) -> bool:
     """Coerce model output to a boolean."""
     if isinstance(value, bool):
         return value
@@ -98,7 +101,7 @@ def _normalize_bool(value: Any) -> bool:
     return False
 
 
-def _normalize_confidence(value: Any) -> float:
+def normalize_confidence(value: Any) -> float:
     """Coerce model output to a 0..1 confidence score."""
     try:
         score = float(value)
@@ -107,6 +110,99 @@ def _normalize_confidence(value: Any) -> float:
     if score > 1.0:
         score = score / 100.0
     return max(0.0, min(1.0, score))
+
+
+async def async_call_llm(
+    hass: HomeAssistant,
+    coordinator: WatchmenCoordinator,
+    *,
+    task_name: str,
+    instructions: str,
+    structure: dict[str, dict[str, Any]],
+    attachments: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Run one structured LLM call via the configured provider.
+
+    Provider ``ai_task`` (default) uses Home Assistant's AI Task service;
+    every other provider performs a direct API call.
+    """
+    provider = coordinator.llm_provider
+    if provider == LLM_PROVIDER_AI_TASK:
+        return await _async_ai_task_call(
+            hass,
+            entity_id=coordinator.ai_task_entity,
+            task_name=task_name,
+            instructions=instructions,
+            structure=structure,
+            attachments=attachments,
+        )
+
+    from .providers import async_call_provider  # imported lazily to avoid cycles
+
+    return await async_call_provider(
+        hass,
+        provider=provider,
+        api_key=coordinator.llm_api_key,
+        model=coordinator.llm_model,
+        base_url=coordinator.llm_base_url,
+        instructions=instructions,
+        structure=structure,
+        attachments=attachments,
+    )
+
+
+async def _async_ai_task_call(
+    hass: HomeAssistant,
+    *,
+    entity_id: str,
+    task_name: str,
+    instructions: str,
+    structure: dict[str, dict[str, Any]],
+    attachments: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Call Home Assistant's ai_task.generate_data service."""
+    if not hass.services.has_service("ai_task", AI_TASK_SERVICE):
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="ai_task_missing",
+        )
+
+    data: dict[str, Any] = {
+        "task_name": task_name,
+        "instructions": instructions,
+        "structure": structure,
+        "attachments": attachments,
+    }
+    if entity_id:
+        data["entity_id"] = entity_id
+
+    try:
+        response = await hass.services.async_call(
+            "ai_task",
+            AI_TASK_SERVICE,
+            data,
+            blocking=True,
+            return_response=True,
+        )
+    except HomeAssistantError:
+        raise
+    except Exception as err:
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="review_failed",
+            translation_placeholders={"error": str(err)},
+        ) from err
+
+    result: Any = response
+    if isinstance(response, dict):
+        result = response.get("data", response)
+    if not isinstance(result, dict):
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="review_failed",
+            translation_placeholders={"error": "unexpected AI response format"},
+        )
+    return result
 
 
 async def async_request_access_review(
@@ -140,36 +236,22 @@ async def async_request_access_review(
                 record=False,
             )
 
-    if not hass.services.has_service("ai_task", AI_TASK_SERVICE):
-        raise ServiceValidationError(
-            translation_domain=DOMAIN,
-            translation_key="ai_task_missing",
-        )
-
     threshold = coordinator.confidence_threshold
-    data: dict[str, Any] = {
-        "task_name": TASK_NAME,
-        "instructions": _build_instructions(
-            camera_entity_id, context, coordinator.residents, threshold
-        ),
-        "structure": DECISION_STRUCTURE,
-        "attachments": [
-            {
-                "media_content_id": f"media-source://camera/{camera_entity_id}",
-                "media_content_type": "image/jpeg",
-            }
-        ],
-    }
-    if coordinator.ai_task_entity:
-        data["entity_id"] = coordinator.ai_task_entity
-
     try:
-        response = await hass.services.async_call(
-            "ai_task",
-            AI_TASK_SERVICE,
-            data,
-            blocking=True,
-            return_response=True,
+        result = await async_call_llm(
+            hass,
+            coordinator,
+            task_name=TASK_NAME,
+            instructions=_build_instructions(
+                camera_entity_id, context, coordinator.residents, threshold
+            ),
+            structure=DECISION_STRUCTURE,
+            attachments=[
+                {
+                    "media_content_id": f"media-source://camera/{camera_entity_id}",
+                    "media_content_type": "image/jpeg",
+                }
+            ],
         )
     except HomeAssistantError:
         raise
@@ -180,18 +262,8 @@ async def async_request_access_review(
             translation_placeholders={"error": str(err)},
         ) from err
 
-    result: Any = response
-    if isinstance(response, dict):
-        result = response.get("data", response)
-    if not isinstance(result, dict):
-        raise HomeAssistantError(
-            translation_domain=DOMAIN,
-            translation_key="review_failed",
-            translation_placeholders={"error": "unexpected AI response format"},
-        )
-
-    model_approved = _normalize_bool(result.get("approved", False))
-    confidence = _normalize_confidence(result.get("confidence", 0.0))
+    model_approved = normalize_bool(result.get("approved", False))
+    confidence = normalize_confidence(result.get("confidence", 0.0))
     person = str(result.get("person") or "unknown")
     reason = str(result.get("reason") or "")
 

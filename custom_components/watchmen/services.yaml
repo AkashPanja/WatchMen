@@ -11,3 +11,59 @@ request_access:
       default: ""
       selector:
         text:
+
+add_face:
+  fields:
+    name:
+      required: true
+      example: Alice
+      selector:
+        text:
+    camera:
+      example: camera.front_door
+      selector:
+        entity:
+          domain: camera
+    image:
+      example: "/9j/4AAQSkZJRg..."
+      selector:
+        text:
+          multiline: true
+
+remove_face:
+  fields:
+    name:
+      required: true
+      example: Alice
+      selector:
+        text:
+
+identify_person:
+  fields:
+    camera:
+      required: true
+      example: camera.front_door
+      selector:
+        entity:
+          domain: camera
+    context:
+      example: doorbell pressed
+      default: ""
+      selector:
+        text:
+    frames_back:
+      example: 4
+      selector:
+        number:
+          min: 0
+          max: 20
+          step: 1
+          mode: box
+    frames_forward:
+      example: 2
+      selector:
+        number:
+          min: 0
+          max: 5
+          step: 1
+          mode: box

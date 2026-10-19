@@ -1,0 +1,104 @@
+blueprint:
+  name: Watchmen person identification
+  description: >-
+    When any trigger fires (doorbell, button, webhook, motion, ...), capture
+    frames around the event, pick the clearest face, zoom in on it and match
+    it against your enrolled Watchmen faces. The matched actions run with the
+    result in `watchmen_person` (`name`, `confidence` in percent, `matched`,
+    `face_visible`, `reason`). Unmatched actions run when nobody is
+    identified — Watchmen fails closed.
+  domain: automation
+  input:
+    trigger:
+      name: Trigger
+      description: >-
+        Any trigger(s) that start the identification. Use the trigger editor
+        to pick device triggers, state changes, events, webhooks and more.
+      selector:
+        trigger:
+    camera:
+      name: Camera
+      description: Camera providing the frames to analyze.
+      selector:
+        entity:
+          domain: camera
+          multiple: false
+    context_note:
+      name: Context note
+      description: Free text describing why identification runs.
+      default: bell pressed
+      selector:
+        text:
+    frames_back:
+      name: Frames back
+      description: How many buffered frames before the trigger to check.
+      default: 4
+      selector:
+        number:
+          min: 0
+          max: 20
+          step: 1
+          mode: box
+    frames_forward:
+      name: Frames forward
+      description: How many frames to capture after the trigger.
+      default: 2
+      selector:
+        number:
+          min: 0
+          max: 5
+          step: 1
+          mode: box
+    min_confidence:
+      name: Minimum match percentage
+      description: Treat matches below this percentage as unidentified.
+      default: 70
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 5
+          mode: slider
+          unit_of_measurement: "%"
+    matched_actions:
+      name: Matched actions
+      description: Run when a person was identified with enough confidence.
+      default: []
+      selector:
+        action:
+    unmatched_actions:
+      name: Unmatched actions
+      description: Run when no face or no confident match was found (optional).
+      default: []
+      selector:
+        action:
+
+triggers:
+  - triggers: !input trigger
+
+conditions: []
+
+actions:
+  - variables:
+      watchmen_min_confidence: !input min_confidence
+  - action: watchmen.identify_person
+    continue_on_error: true
+    data:
+      camera: !input camera
+      context: !input context_note
+      frames_back: !input frames_back
+      frames_forward: !input frames_forward
+    response_variable: watchmen_person
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ (watchmen_person | default({})).matched | bool(false) and
+                 ((watchmen_person | default({})).confidence | float(0)) >=
+                 (watchmen_min_confidence | float(0)) }}
+        sequence: !input matched_actions
+    default: !input unmatched_actions
+
+mode: queued
+max: 3
+max_exceeded: silent
